@@ -24,6 +24,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
@@ -72,7 +73,36 @@ FunctionPass *createMyScalarReplAggregatesPass() { return new SROA(); }
 // Function runOnFunction:
 // Entry point for the overall ScalarReplAggregates function pass.
 // This function is provided to you.
+
+
+struct AllocaPrinter: public InstVisitor<AllocaPrinter>
+{
+  int i_allocaInst = 0;
+  void visitAllocaInst(AllocaInst &allocaInst)
+  {
+    dbgs() << "AllocaInst " << i_allocaInst << ": " << allocaInst << "\n";
+    i_allocaInst += 1;
+  }
+};
+
+
 bool SROA::runOnFunction(Function &F) {
+  F.print(dbgs());
+  dbgs() << "===========================================================================n";
+  dbgs() << "Printing all instructions:\n";
+  for (BasicBlock& bb: F)
+  {
+    int i = 0;
+    for (Instruction& insn : bb)
+    {
+      dbgs() << "INSN " << i << ": " << insn << "\n";
+      i += 1;
+    }
+  }
+  dbgs() << "===========================================================================n";
+  dbgs() << "Printing only alloca instructions:\n";
+  AllocaPrinter allocaPrinter;
+  allocaPrinter.visit(F);
 
   bool Changed = false;
   return Changed;
