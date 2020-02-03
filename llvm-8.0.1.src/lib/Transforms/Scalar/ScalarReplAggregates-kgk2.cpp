@@ -54,8 +54,8 @@ namespace {
 }
 
 char SROA::ID = 0;
-static RegisterPass<SROA> X("scalarrepl-netid",
-			    "Scalar Replacement of Aggregates (by <netid>)",
+static RegisterPass<SROA> X("scalarrepl-kgk2",
+			    "Scalar Replacement of Aggregates (by <kgk2>)",
 			    false /* does not modify the CFG */,
 			    false /* transformation, not just analysis */);
 
