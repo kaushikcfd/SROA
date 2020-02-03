@@ -1,0 +1,4 @@
+*
+!.gitignore
+!llvm-8.0.1.src/lib/Transforms/Scalar/ScalarReplAggregates-kgk2.cpp
+!tests/*
