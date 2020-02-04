@@ -32,8 +32,9 @@
 #include "llvm/ADT/Statistic.h"
 using namespace llvm;
 
-STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
-STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
+// FIXME: Enable them later?
+// STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
+// STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
 
 namespace {
   struct SROA : public FunctionPass {
@@ -75,37 +76,66 @@ FunctionPass *createMyScalarReplAggregatesPass() { return new SROA(); }
 // This function is provided to you.
 
 
-struct AllocaPrinter: public InstVisitor<AllocaPrinter>
+struct ExpandableAllocaCollector: public InstVisitor<ExpandableAllocaCollector>
 {
   int i_allocaInst = 0;
+  std::vector<AllocaInst*> collectedAllocas;
+
   void visitAllocaInst(AllocaInst &allocaInst)
   {
     dbgs() << "AllocaInst " << i_allocaInst << ": " << allocaInst << "\n";
+    if (allocaInst.getAllocatedType()->isStructTy())
+    {
+      // FIXME: In the final version: there should be some check as in which
+      // alloca instructions are chosen for expansion.
+      collectedAllocas.push_back(&allocaInst);
+
+      LLVM_DEBUG(dbgs() << "Its a pointer types and...\n");
+      LLVM_DEBUG(dbgs() << "The type is --" << *allocaInst.getAllocatedType() << "\n");
+      LLVM_DEBUG(dbgs() << "And it is writing to..." << allocaInst.getName()+"_danda\n");
+    }
     i_allocaInst += 1;
   }
 };
 
 
-bool SROA::runOnFunction(Function &F) {
-  F.print(dbgs());
-  dbgs() << "===========================================================================n";
-  dbgs() << "Printing all instructions:\n";
-  for (BasicBlock& bb: F)
-  {
-    int i = 0;
-    for (Instruction& insn : bb)
-    {
-      dbgs() << "INSN " << i << ": " << insn << "\n";
-      i += 1;
-    }
-  }
-  dbgs() << "===========================================================================n";
-  dbgs() << "Printing only alloca instructions:\n";
-  AllocaPrinter allocaPrinter;
-  allocaPrinter.visit(F);
+void expandStructAlloca(Function &F, AllocaInst* allocaInst)
+{
+  assert(allocaInst->getAllocatedType()->isStructTy());
+  std::string valueName = allocaInst->getName();
+  StructType* structTypeToBeExpanded = dyn_cast<StructType>(allocaInst->getAllocatedType());
+  std::vector<AllocaInst*> newInsns;
+  // TODO: Also need to data structure to store the assignee of the NEW alloca
+  // instructions
+ 
+  int i = 0;
+  // init-ing new instruction
+  for(Type* const type: structTypeToBeExpanded->elements())
+    newInsns.push_back(new AllocaInst(type, 0, valueName+"_"+std::to_string(i++), allocaInst));
 
-  bool Changed = false;
-  return Changed;
+  i = 0;
+  dbgs() << "===========================================================================\n";
+  dbgs() << "Printing the insns to be inserted:\n";
+  for (Instruction* inst: newInsns)
+  {
+    dbgs() << "New Insn " << ++i << ": " << *inst << "\n";
+  }
 
 }
 
+
+bool SROA::runOnFunction(Function &F) {
+  dbgs() << "===========================================================================\n";
+  dbgs() << "Started with:\n";
+  F.print(dbgs());
+  ExpandableAllocaCollector allocaCollector;
+  allocaCollector.visit(F);
+  assert(allocaCollector.collectedAllocas.size() == 1);
+  expandStructAlloca(F, allocaCollector.collectedAllocas[0]);
+  dbgs() << "===========================================================================\n";
+  dbgs() << "Final Function:\n";
+  F.print(dbgs());
+
+  // since we changed the function, we *must* return True.
+  return true;
+}
