@@ -30,6 +30,7 @@
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 using namespace llvm;
 
 // FIXME: Enable them later?
@@ -67,15 +68,9 @@ static RegisterPass<SROA> X("scalarrepl-kgk2",
 FunctionPass *createMyScalarReplAggregatesPass() { return new SROA(); }
 
 
-//===----------------------------------------------------------------------===//
-//                      SKELETON FUNCTION TO BE IMPLEMENTED
-//===----------------------------------------------------------------------===//
-//
-// Function runOnFunction:
-// Entry point for the overall ScalarReplAggregates function pass.
-// This function is provided to you.
-
-
+/*
+ * Collects all possible struct objects that can be legally expanded.
+ */
 struct ExpandableAllocaCollector: public InstVisitor<ExpandableAllocaCollector>
 {
   int i_allocaInst = 0;
@@ -83,7 +78,7 @@ struct ExpandableAllocaCollector: public InstVisitor<ExpandableAllocaCollector>
 
   void visitAllocaInst(AllocaInst &allocaInst)
   {
-    dbgs() << "AllocaInst " << i_allocaInst << ": " << allocaInst << "\n";
+    LLVM_DEBUG(dbgs() << "AllocaInst " << i_allocaInst << ": " << allocaInst << "\n");
     if (allocaInst.getAllocatedType()->isStructTy())
     {
       // FIXME: In the final version: there should be some check as in which
@@ -99,31 +94,74 @@ struct ExpandableAllocaCollector: public InstVisitor<ExpandableAllocaCollector>
 };
 
 
+// {{{ Replace an alloca with all its members
+
+/*
+ * Replaces all instances of the GEP of the struct to be expanded with the
+ * "new" variables.
+ */
+struct GetElemPtrReplacer: public InstVisitor<GetElemPtrReplacer>
+{
+  Value* structToExpand;
+  std::vector<Value*> scalarsToBeReplacedWith;
+
+  void visitGetElementPtrInst (GetElementPtrInst &gepInsn)
+  {
+    if(gepInsn.getPointerOperand() == structToExpand)
+    {
+      LLVM_DEBUG(dbgs() << "We should replace: " << gepInsn << "\n");
+      assert(gepInsn.getNumIndices() == 2);
+      assert(gepInsn.hasAllConstantIndices());
+      ConstantInt *pos = (ConstantInt*)((gepInsn.idx_end()-1)->get());
+      uint64_t intPos = pos->getZExtValue();
+      LLVM_DEBUG(dbgs() << "This  insn should be replaced with '" << *(scalarsToBeReplacedWith[intPos]) << "'\n");
+      BasicBlock::iterator ii(gepInsn);
+      ReplaceInstWithValue(gepInsn.getParent()->getInstList(), ii,
+          scalarsToBeReplacedWith[intPos]);
+    }
+  }
+};
+
+/*
+ * Removes an *allocaInst* to a struct object and expands all its attributes
+ */
 void expandStructAlloca(Function &F, AllocaInst* allocaInst)
 {
   assert(allocaInst->getAllocatedType()->isStructTy());
   std::string valueName = allocaInst->getName();
   StructType* structTypeToBeExpanded = dyn_cast<StructType>(allocaInst->getAllocatedType());
-  std::vector<AllocaInst*> newInsns;
-  // TODO: Also need to data structure to store the assignee of the NEW alloca
-  // instructions
+  std::vector<Value*> insertedScalars;
  
   int i = 0;
-  // init-ing new instruction
+  // init-ing new instructions
   for(Type* const type: structTypeToBeExpanded->elements())
-    newInsns.push_back(new AllocaInst(type, 0, valueName+"_"+std::to_string(i++), allocaInst));
-
-  i = 0;
-  dbgs() << "===========================================================================\n";
-  dbgs() << "Printing the insns to be inserted:\n";
-  for (Instruction* inst: newInsns)
   {
-    dbgs() << "New Insn " << ++i << ": " << *inst << "\n";
+    AllocaInst* newInsn = new AllocaInst(type, 0, valueName+"_"+std::to_string(i++), allocaInst);
+    LLVM_DEBUG(dbgs() << "Inserted a new Insn " << i << ": " << *newInsn << "\n");
+    insertedScalars.push_back(newInsn);
   }
 
+  // replacing the uses of fields of structs with those of the newly created
+  // scalars
+  GetElemPtrReplacer gepReplacer;
+  gepReplacer.structToExpand = allocaInst;
+  gepReplacer.scalarsToBeReplacedWith = insertedScalars;
+  gepReplacer.visit(F);
+
+  // remove the allocaInst
+  allocaInst->eraseFromParent();
 }
 
+// }}}
 
+
+//===----------------------------------------------------------------------===//
+//                      SKELETON FUNCTION TO BE IMPLEMENTED
+//===----------------------------------------------------------------------===//
+//
+// Function runOnFunction:
+// Entry point for the overall ScalarReplAggregates function pass.
+// This function is provided to you.
 bool SROA::runOnFunction(Function &F) {
   dbgs() << "===========================================================================\n";
   dbgs() << "Started with:\n";
@@ -139,3 +177,5 @@ bool SROA::runOnFunction(Function &F) {
   // since we changed the function, we *must* return True.
   return true;
 }
+
+// vim:fdm=marker
