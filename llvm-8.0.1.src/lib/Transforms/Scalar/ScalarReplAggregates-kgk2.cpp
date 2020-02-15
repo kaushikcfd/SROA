@@ -68,6 +68,69 @@ static RegisterPass<SROA> X("scalarrepl-kgk2",
 FunctionPass *createMyScalarReplAggregatesPass() { return new SROA(); }
 
 
+bool isAllocaFirstClassType(AllocaInst& allocaInst)
+{
+    return (
+        allocaInst.getAllocatedType()->isFPOrFPVectorTy()
+        || allocaInst.getAllocatedType()->isIntOrIntVectorTy()
+        || allocaInst.getAllocatedType()->isPtrOrPtrVectorTy());
+}
+
+
+
+/*
+ * Collects all possible struct objects that can be legally expanded.
+ */
+struct PromotableAllocaCollector: public InstVisitor<PromotableAllocaCollector>
+{
+  std::vector<AllocaInst*> collectedAllocas;
+
+  void visitAllocaInst(AllocaInst &allocaInst)
+  {
+    LLVM_DEBUG(dbgs() << "=============================================================\n");
+    LLVM_DEBUG(dbgs() << "Came for the allocaInst: " << allocaInst << "\n");
+    
+    // check (P1)
+    if (isAllocaFirstClassType(allocaInst))
+    {
+      Value::use_iterator use_iter=allocaInst.use_begin(), use_end=allocaInst.use_end();
+      // check (P2)
+      for (; use_iter != use_end; ++use_iter)
+      {
+        if (AllocaInst *Inst = dyn_cast<AllocaInst>(*use_iter))
+          continue;
+
+        if (LoadInst *loadInst = dyn_cast<LoadInst>(*use_iter))
+        {
+          if (!loadInst->isVolatile())
+            continue;
+          else
+            // use is a load, but volatile => alloca cannot be promoted
+            break;
+        }
+
+        if (StoreInst *storeInst = dyn_cast<StoreInst>(*use_iter))
+        {
+          if (!storeInst->isVolatile())
+            continue;
+          else
+            // use is a store, but volatile => alloca cannot be promoted
+            break;
+        }
+
+        // Use is neither 'load' nor a 'store' => alloca cannot be promoted
+        LLVM_DEBUG(dbgs() << "Failed because '"<< *(*use_iter) << "' is neither a load nor store.\n");
+        break;
+      }
+      if (use_iter == use_end)
+        collectedAllocas.push_back(&allocaInst);
+    }
+    else
+      LLVM_DEBUG(dbgs() << "(P1) has royally embarassed itself.\n");
+  }
+};
+
+
 /*
  * Collects all possible struct objects that can be legally expanded.
  */
@@ -166,10 +229,22 @@ bool SROA::runOnFunction(Function &F) {
   dbgs() << "===========================================================================\n";
   dbgs() << "Started with:\n";
   F.print(dbgs());
-  ExpandableAllocaCollector allocaCollector;
-  allocaCollector.visit(F);
-  assert(allocaCollector.collectedAllocas.size() == 1);
-  expandStructAlloca(F, allocaCollector.collectedAllocas[0]);
+
+  // Step1: Collect all allocas to be handed to PromoteMemToReg.
+  PromotableAllocaCollector promotableAllocaCollector;
+  promotableAllocaCollector.visit(F);
+  DominatorTree domTree(F);
+  PromoteMemToReg(promotableAllocaCollector.collectedAllocas, domTree);
+
+  // Step2: Collect all *struct-type allocas* which could be expanded.
+  // FIXME: Currently just collects all allocas. Instead only collect legal
+  // struct-allocas.
+  ExpandableAllocaCollector expandableAllocaCollector;
+  expandableAllocaCollector.visit(F);
+  assert(expandableAllocaCollector.collectedAllocas.size() == 1);
+
+  // Step3: Expand all allocas collected in Step2.
+  expandStructAlloca(F, expandableAllocaCollector.collectedAllocas[0]);
   dbgs() << "===========================================================================\n";
   dbgs() << "Final Function:\n";
   F.print(dbgs());
