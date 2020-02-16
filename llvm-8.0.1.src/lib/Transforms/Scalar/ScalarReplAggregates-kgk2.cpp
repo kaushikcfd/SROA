@@ -131,28 +131,80 @@ struct PromotableAllocaCollector: public InstVisitor<PromotableAllocaCollector>
 };
 
 
+bool satisfiesU1OrU2(Value::use_iterator use)
+{
+  if (AllocaInst *Inst = dyn_cast<AllocaInst>(*use))
+    return true;
+
+  if (GetElementPtrInst *gepInst = dyn_cast<GetElementPtrInst>(*use))
+  {
+    if (gepInst->hasAllConstantIndices())
+    {
+      //FIXME: Not sure if this assert is needed. This might probably be
+      //dangerous
+      assert (gepInst->getNumIndices() == 2);
+      ConstantInt *pos = (ConstantInt*)((gepInst->idx_begin())->get());
+      uint64_t firstIdx = pos->getZExtValue();
+      if (firstIdx == 0)
+      {
+        Value::use_iterator use_iter=gepInst->use_begin(), use_end=gepInst->use_end();
+        for (; use_iter != use_end; ++use_iter)
+        {
+          if (LoadInst *loadInst = dyn_cast<LoadInst>(*use_iter))
+          {
+            if (loadInst->getPointerOperand() == gepInst)
+              continue;
+            else
+              return false;
+          }
+
+          if (StoreInst *storeInst = dyn_cast<StoreInst>(*use_iter))
+          {
+            if (storeInst->getPointerOperand() == gepInst)
+              continue;
+            else
+              return false;
+          }
+
+          if (!satisfiesU1OrU2(use_iter))
+            return false;
+        }
+        assert (use_iter == use_end);
+        return true;
+      }
+    }
+  }
+
+  if (ICmpInst *icmpInst = dyn_cast<ICmpInst>(*use))
+  {
+    if (isa<ConstantPointerNull>(icmpInst->getOperand(0)) || isa<ConstantPointerNull>(icmpInst->getOperand(1)))
+      return true;
+  }
+
+  return false;
+}
+
+
 /*
  * Collects all possible struct objects that can be legally expanded.
  */
 struct ExpandableAllocaCollector: public InstVisitor<ExpandableAllocaCollector>
 {
-  int i_allocaInst = 0;
   std::vector<AllocaInst*> collectedAllocas;
 
   void visitAllocaInst(AllocaInst &allocaInst)
   {
-    LLVM_DEBUG(dbgs() << "AllocaInst " << i_allocaInst << ": " << allocaInst << "\n");
     if (allocaInst.getAllocatedType()->isStructTy())
     {
-      // FIXME: In the final version: there should be some check as in which
-      // alloca instructions are chosen for expansion.
-      collectedAllocas.push_back(&allocaInst);
-
-      LLVM_DEBUG(dbgs() << "Its a pointer types and...\n");
-      LLVM_DEBUG(dbgs() << "The type is --" << *allocaInst.getAllocatedType() << "\n");
-      LLVM_DEBUG(dbgs() << "And it is writing to..." << allocaInst.getName()+"_danda\n");
+        Value::use_iterator use_iter=allocaInst.use_begin(), use_end=allocaInst.use_end();
+        for (; use_iter != use_end; ++use_iter)
+        {
+          if (!satisfiesU1OrU2(use_iter))
+            break;
+        }
+        if (use_iter == use_end)
+          collectedAllocas.push_back(&allocaInst);
     }
-    i_allocaInst += 1;
   }
 };
 
@@ -237,14 +289,13 @@ bool SROA::runOnFunction(Function &F) {
   PromoteMemToReg(promotableAllocaCollector.collectedAllocas, domTree);
 
   // Step2: Collect all *struct-type allocas* which could be expanded.
-  // FIXME: Currently just collects all allocas. Instead only collect legal
-  // struct-allocas.
   ExpandableAllocaCollector expandableAllocaCollector;
   expandableAllocaCollector.visit(F);
   assert(expandableAllocaCollector.collectedAllocas.size() == 1);
 
   // Step3: Expand all allocas collected in Step2.
-  expandStructAlloca(F, expandableAllocaCollector.collectedAllocas[0]);
+  for (AllocaInst* allocaToBeExpanded: expandableAllocaCollector.collectedAllocas)
+    expandStructAlloca(F, allocaToBeExpanded);
   dbgs() << "===========================================================================\n";
   dbgs() << "Final Function:\n";
   F.print(dbgs());
