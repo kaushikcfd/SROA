@@ -3,7 +3,7 @@ CC = clang
 
 %.ll: %.c
 	$(CLANG) -Xclang -disable-O0-optnone -S -emit-llvm $<
-	opt -scalarrepl-kgk2 -S $@ -o $@
+	opt -stats -scalarrepl-kgk2 -S $@ -o $@
 
 %.bc: %.ll
 	llvm-as $< -o $@
