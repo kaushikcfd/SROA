@@ -19,7 +19,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "scalarrepl"
+#define DEBUG_TYPE "scalarrepl-kgk2"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -33,9 +33,8 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 using namespace llvm;
 
-// FIXME: Enable them later?
-// STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
-// STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
+STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
+STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
 
 namespace {
   struct SROA : public FunctionPass {
@@ -97,7 +96,7 @@ struct PromotableAllocaCollector: public InstVisitor<PromotableAllocaCollector>
       // check (P2)
       for (; use_iter != use_end; ++use_iter)
       {
-        if (AllocaInst *Inst = dyn_cast<AllocaInst>(*use_iter))
+        if (isa<AllocaInst>(*use_iter))
           continue;
 
         if (LoadInst *loadInst = dyn_cast<LoadInst>(*use_iter))
@@ -131,17 +130,13 @@ struct PromotableAllocaCollector: public InstVisitor<PromotableAllocaCollector>
 };
 
 
-bool satisfiesU1OrU2(Value::use_iterator use)
+bool satisfiesU1OrU2(User* user)
 {
-  if (AllocaInst *Inst = dyn_cast<AllocaInst>(*use))
-    return true;
-
-  if (GetElementPtrInst *gepInst = dyn_cast<GetElementPtrInst>(*use))
+  if (GetElementPtrInst *gepInst = dyn_cast<GetElementPtrInst>(user))
   {
     if (gepInst->hasAllConstantIndices())
     {
-      //FIXME: Not sure if this assert is needed. This might probably be
-      //dangerous
+      //FIXME: Not sure if this assert is needed. This might be dangerous.
       assert (gepInst->getNumIndices() == 2);
       ConstantInt *pos = (ConstantInt*)((gepInst->idx_begin())->get());
       uint64_t firstIdx = pos->getZExtValue();
@@ -150,7 +145,7 @@ bool satisfiesU1OrU2(Value::use_iterator use)
         Value::use_iterator use_iter=gepInst->use_begin(), use_end=gepInst->use_end();
         for (; use_iter != use_end; ++use_iter)
         {
-          if (LoadInst *loadInst = dyn_cast<LoadInst>(*use_iter))
+          if (LoadInst *loadInst = dyn_cast<LoadInst>(use_iter->getUser()))
           {
             if (loadInst->getPointerOperand() == gepInst)
               continue;
@@ -158,7 +153,7 @@ bool satisfiesU1OrU2(Value::use_iterator use)
               return false;
           }
 
-          if (StoreInst *storeInst = dyn_cast<StoreInst>(*use_iter))
+          if (StoreInst *storeInst = dyn_cast<StoreInst>(use_iter->getUser()))
           {
             if (storeInst->getPointerOperand() == gepInst)
               continue;
@@ -166,7 +161,7 @@ bool satisfiesU1OrU2(Value::use_iterator use)
               return false;
           }
 
-          if (!satisfiesU1OrU2(use_iter))
+          if (!satisfiesU1OrU2(use_iter->getUser()))
             return false;
         }
         assert (use_iter == use_end);
@@ -175,7 +170,7 @@ bool satisfiesU1OrU2(Value::use_iterator use)
     }
   }
 
-  if (ICmpInst *icmpInst = dyn_cast<ICmpInst>(*use))
+  if (ICmpInst *icmpInst = dyn_cast<ICmpInst>(user))
   {
     if (isa<ConstantPointerNull>(icmpInst->getOperand(0)) || isa<ConstantPointerNull>(icmpInst->getOperand(1)))
       return true;
@@ -196,14 +191,23 @@ struct ExpandableAllocaCollector: public InstVisitor<ExpandableAllocaCollector>
   {
     if (allocaInst.getAllocatedType()->isStructTy())
     {
-        Value::use_iterator use_iter=allocaInst.use_begin(), use_end=allocaInst.use_end();
-        for (; use_iter != use_end; ++use_iter)
+      LLVM_DEBUG(dbgs() << "Inspecting '" << allocaInst << "'\n");
+      Value::use_iterator use_iter=allocaInst.use_begin(), use_end=allocaInst.use_end();
+      for (; use_iter != use_end; ++use_iter)
+      {
+        LLVM_DEBUG(dbgs() << "User: " << *(use_iter->getUser()) << "\n");
+
+        if (!satisfiesU1OrU2(use_iter->getUser()))
         {
-          if (!satisfiesU1OrU2(use_iter))
-            break;
+          LLVM_DEBUG(dbgs() << "Did not satisfy either (U1) or (U2).\n");
+          break;
         }
-        if (use_iter == use_end)
-          collectedAllocas.push_back(&allocaInst);
+        else
+          LLVM_DEBUG(dbgs() << "Satisfied both U1 & U2.\n");
+
+      }
+      if (use_iter == use_end)
+        collectedAllocas.push_back(&allocaInst);
     }
   }
 };
@@ -271,33 +275,46 @@ void expandStructAlloca(Function &F, AllocaInst* allocaInst)
 
 
 //===----------------------------------------------------------------------===//
-//                      SKELETON FUNCTION TO BE IMPLEMENTED
+//                      SROA: Entry Point                                     //
 //===----------------------------------------------------------------------===//
-//
-// Function runOnFunction:
-// Entry point for the overall ScalarReplAggregates function pass.
-// This function is provided to you.
 bool SROA::runOnFunction(Function &F) {
-  dbgs() << "===========================================================================\n";
-  dbgs() << "Started with:\n";
+  dbgs() << "===-------------------------------------------------------------------------===\n";
+  dbgs() << "Input Function:\n";
+  dbgs() << "===-------------------------------------------------------------------------===\n";
   F.print(dbgs());
+  dbgs() << "===-------------------------------------------------------------------------===\n";
 
-  // Step1: Collect all allocas to be handed to PromoteMemToReg.
-  PromotableAllocaCollector promotableAllocaCollector;
-  promotableAllocaCollector.visit(F);
-  DominatorTree domTree(F);
-  PromoteMemToReg(promotableAllocaCollector.collectedAllocas, domTree);
+  bool allocasWerePromoted = true, allocasWereExpanded = true;
+  int iter_count = 0;
 
-  // Step2: Collect all *struct-type allocas* which could be expanded.
-  ExpandableAllocaCollector expandableAllocaCollector;
-  expandableAllocaCollector.visit(F);
-  assert(expandableAllocaCollector.collectedAllocas.size() == 1);
+  while (allocasWerePromoted || allocasWereExpanded)
+  {
+    dbgs() << "DEBUG INFO: Running iteration #" << ++iter_count << ".\n";
 
-  // Step3: Expand all allocas collected in Step2.
-  for (AllocaInst* allocaToBeExpanded: expandableAllocaCollector.collectedAllocas)
-    expandStructAlloca(F, allocaToBeExpanded);
-  dbgs() << "===========================================================================\n";
-  dbgs() << "Final Function:\n";
+    // Step1: Collect all allocas to be handed to PromoteMemToReg.
+    PromotableAllocaCollector promotableAllocaCollector;
+    promotableAllocaCollector.visit(F);
+    NumPromoted += promotableAllocaCollector.collectedAllocas.size();
+    allocasWerePromoted = !(promotableAllocaCollector.collectedAllocas.empty());
+
+    DominatorTree domTree(F);
+    PromoteMemToReg(promotableAllocaCollector.collectedAllocas, domTree);
+
+    // Step2: Collect all *struct-type allocas* which could be expanded.
+    ExpandableAllocaCollector expandableAllocaCollector;
+    expandableAllocaCollector.visit(F);
+    NumReplaced += expandableAllocaCollector.collectedAllocas.size();
+    allocasWereExpanded = !(expandableAllocaCollector.collectedAllocas.empty());
+
+    // Step3: Expand all allocas collected in Step2.
+    for (AllocaInst* allocaToBeExpanded: expandableAllocaCollector.collectedAllocas)
+      expandStructAlloca(F, allocaToBeExpanded);
+  }
+
+
+  dbgs() << "===-------------------------------------------------------------------------===\n";
+  dbgs() << "SROA-ed Function:\n";
+  dbgs() << "===-------------------------------------------------------------------------===\n";
   F.print(dbgs());
 
   // since we changed the function, we *must* return True.
