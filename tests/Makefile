@@ -1,8 +1,15 @@
 CLANG = clang
 CC = clang
+TESTS := $(shell find $(SOURCEDIR) -name '*.c')
+
+
+test: $(TESTS:%.c=%.run)
+	@echo "*******************************************************************************"
+	@echo "*                                All tests pass!                              *"
+	@echo "*******************************************************************************"
 
 %.ll: %.c
-	$(CLANG) -Xclang -disable-O0-optnone -S -emit-llvm $<
+	$(CLANG) -w -Xclang -disable-O0-optnone -S -emit-llvm $<
 	opt -stats -scalarrepl-kgk2 -S $@ -o $@
 
 %.bc: %.ll
@@ -13,6 +20,9 @@ CC = clang
 
 %.exe: %.s
 	$(CC) -g $< -o $@
+
+%.run: %.exe
+	./$<
 
 clean:
 	-rm -f *.ll *.exe *.bc .ll *.out *.s *.o

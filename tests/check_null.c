@@ -12,7 +12,7 @@ int main()
   fav_3d_pt.y = 18;
   fav_3d_pt.z = 22;
 
-  bool isNULL = (&fav_3d_pt == NULL);
+  bool isNULL = (&fav_3d_pt != NULL);
 
   printf("Is it NULL?: %d.\n", isNULL);
 
