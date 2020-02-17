@@ -297,18 +297,19 @@ void expandStructAlloca(Function &F, AllocaInst* allocaInst)
 //                      SROA: Entry Point                                     //
 //===----------------------------------------------------------------------===//
 bool SROA::runOnFunction(Function &F) {
+  LLVM_DEBUG(
   dbgs() << "===-------------------------------------------------------------------------===\n";
   dbgs() << "Input Function:\n";
   dbgs() << "===-------------------------------------------------------------------------===\n";
   F.print(dbgs());
-  dbgs() << "===-------------------------------------------------------------------------===\n";
+  dbgs() << "===-------------------------------------------------------------------------===\n");
 
   bool allocasWerePromoted = true, allocasWereExpanded = true;
   int iter_count = 0;
 
   while (allocasWerePromoted || allocasWereExpanded)
   {
-    dbgs() << "DEBUG INFO: Running iteration #" << ++iter_count << ".\n";
+    LLVM_DEBUG(dbgs() << "DEBUG INFO: Running iteration #" << ++iter_count << ".\n");
 
     // Step1: Collect all allocas to be handed to PromoteMemToReg.
     PromotableAllocaCollector promotableAllocaCollector;
@@ -330,11 +331,11 @@ bool SROA::runOnFunction(Function &F) {
       expandStructAlloca(F, allocaToBeExpanded);
   }
 
-
+  LLVM_DEBUG(
   dbgs() << "===-------------------------------------------------------------------------===\n";
   dbgs() << "SROA-ed Function:\n";
   dbgs() << "===-------------------------------------------------------------------------===\n";
-  F.print(dbgs());
+  F.print(dbgs()));
 
   // since we changed the function, we *must* return True.
   return true;
