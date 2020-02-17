@@ -172,8 +172,29 @@ bool satisfiesU1OrU2(User* user)
 
   if (ICmpInst *icmpInst = dyn_cast<ICmpInst>(user))
   {
-    if (isa<ConstantPointerNull>(icmpInst->getOperand(0)) || isa<ConstantPointerNull>(icmpInst->getOperand(1)))
-      return true;
+    if (icmpInst->isEquality())
+    {
+      if (isa<ConstantPointerNull>(icmpInst->getOperand(0))
+          || isa<ConstantPointerNull>(icmpInst->getOperand(1)))
+      {
+        if (icmpInst->getPredicate() == CmpInst::Predicate::ICMP_EQ)
+        {
+          BasicBlock::iterator ii(icmpInst);
+          ReplaceInstWithValue(icmpInst->getParent()->getInstList(), ii,
+              ConstantInt::getFalse(icmpInst->getType()));
+        }
+        else
+        {
+          assert (icmpInst->getPredicate() == CmpInst::Predicate::ICMP_NE);
+
+          BasicBlock::iterator ii(icmpInst);
+          ReplaceInstWithValue(icmpInst->getParent()->getInstList(), ii,
+              ConstantInt::getTrue(icmpInst->getType()));
+        }
+
+        return true;
+      }
+    }
   }
 
   return false;
@@ -229,8 +250,6 @@ struct GetElemPtrReplacer: public InstVisitor<GetElemPtrReplacer>
     if(gepInsn.getPointerOperand() == structToExpand)
     {
       LLVM_DEBUG(dbgs() << "We should replace: " << gepInsn << "\n");
-      assert(gepInsn.getNumIndices() == 2);
-      assert(gepInsn.hasAllConstantIndices());
       ConstantInt *pos = (ConstantInt*)((gepInsn.idx_end()-1)->get());
       uint64_t intPos = pos->getZExtValue();
       LLVM_DEBUG(dbgs() << "This  insn should be replaced with '" << *(scalarsToBeReplacedWith[intPos]) << "'\n");
